@@ -17,7 +17,7 @@ const rspackAssetsContext = process.env.RSPACK_ASSETS_CONTEXT || RSPACK_ASSETS_C
  * @constant {RegExp}
  */
 const RSPACK_CHUNKS_REGEX = new RegExp(
-  `^\/${rspackChunksContext}\/(.+)$`,
+  `^/${rspackChunksContext}/(.+)$`,
 );
 
 /**
@@ -25,7 +25,7 @@ const RSPACK_CHUNKS_REGEX = new RegExp(
  * @constant {RegExp}
  */
 const RSPACK_ASSETS_REGEX = new RegExp(
-  `^\/${rspackAssetsContext}\/(.+)$`,
+  `^/${rspackAssetsContext}/(.+)$`,
 );
 
 if (Meteor.isDevelopment) {

@@ -448,7 +448,7 @@ export class Watcher {
 
     // Were we given an inconsistent WatchSet? Fire now and be done with it.
     if (this.watchSet.alwaysFire) {
-      this.fire();
+      this.fire('(alwaysFire flag)');
       return;
     }
 
@@ -481,13 +481,13 @@ export class Watcher {
         return false;
       }
       // Nope, not what we expected.
-      this.fire();
+      this.fire(absPath + ' (deleted)');
       return true;
     }
 
     // File exists! Is that what we expected?
     if (oldHash === null) {
-      this.fire();
+      this.fire(absPath + ' (created)');
       return true;
     }
 
@@ -496,7 +496,7 @@ export class Watcher {
       return false;
     }
 
-    this.fire();
+    this.fire(absPath + ' (modified)');
     return true;
   }
 
@@ -513,7 +513,7 @@ export class Watcher {
 
       // If the directory has changed (including being deleted or created).
       if (! _.isEqual(info.contents, newContents)) {
-        this.fire();
+        this.fire(info.absPath + ' (directory)');
         return true;
       }
     }
@@ -554,7 +554,7 @@ export class Watcher {
 
     if (files.statOrNull(absPath)) {
       if (this.mustNotExist(absPath)) {
-        this.fire();
+        this.fire(absPath + ' (mustNotExist)');
         return;
       }
 
@@ -571,7 +571,7 @@ export class Watcher {
 
     } else {
       if (this.mustBeAFile(absPath)) {
-        this.fire();
+        this.fire(absPath + ' (mustBeAFile)');
         return;
       }
 
@@ -623,7 +623,7 @@ export class Watcher {
               err.code === "ENOTDIR") {
             // The directory was removed or changed type since we called
             // this._updateStatForWatch, so we fire unconditionally.
-            this.fire();
+            this.fire(absPath + ' (dir removed/changed)');
             return;
           }
           throw err;
@@ -686,17 +686,17 @@ export class Watcher {
       // has conflicting expectations.
       if (stat.isFile()) {
         if (mustNotExist) {
-          this.fire();
+          this.fire(absPath + ' (file exists, mustNotExist)');
         }
       } else if (stat.isDirectory()) {
         if (mustNotExist || mustBeAFile) {
-          this.fire();
+          this.fire(absPath + ' (is dir, conflict)');
         }
       } else {
         // Neither a file nor a directory, so treat as non-existent.
         stat = null;
         if (mustBeAFile) {
-          this.fire();
+          this.fire(absPath + ' (not file, mustBeAFile)');
         }
       }
 
@@ -707,19 +707,19 @@ export class Watcher {
     } else if (stat && stat.isFile()) {
       entry.lastStat = stat;
       if (! lastStat || ! lastStat.isFile()) {
-        this.fire();
+        this.fire(absPath + ' (became file)');
       }
 
     } else if (stat && stat.isDirectory()) {
       entry.lastStat = stat;
       if (! lastStat || ! lastStat.isDirectory()) {
-        this.fire();
+        this.fire(absPath + ' (became dir)');
       }
 
     } else {
       entry.lastStat = stat = null;
       if (lastStat) {
-        this.fire();
+        this.fire(absPath + ' (removed)');
       }
     }
 
@@ -785,8 +785,11 @@ export class Watcher {
     });
   }
 
-  private fire() {
+  private fire(triggerPath?: string) {
     if (this.stopped) return;
+    if (triggerPath) {
+      console.log(`[RESTART TRIGGER] ${triggerPath}`);
+    }
     this.stop();
     this.onChange();
   }

@@ -425,6 +425,24 @@ export function startRspackServerWatch(options = {}) {
 }
 
 /**
+ * Waits for a file to exist with a timeout
+ * @param {string} filePath - Path to the file to wait for
+ * @param {number} timeoutMs - Maximum time to wait in milliseconds
+ * @param {number} intervalMs - Interval between checks in milliseconds
+ * @returns {Promise<boolean>} True if file exists, false if timeout
+ */
+async function waitForFileExists(filePath, timeoutMs = 5000, intervalMs = 50) {
+  const startTime = Date.now();
+  while (Date.now() - startTime < timeoutMs) {
+    if (fs.existsSync(filePath)) {
+      return true;
+    }
+    await new Promise(resolve => setTimeout(resolve, intervalMs));
+  }
+  return false;
+}
+
+/**
  * Runs Rspack build for both client and server without watch mode
  * @param {Object} options - Options for the build
  * @param {boolean} options.isClient - Whether this is a client build
@@ -436,13 +454,34 @@ export function startRspackServerWatch(options = {}) {
  * @throws {Error} If the build process fails
  */
 export async function runRspackBuild({ isClient, isServer, isTest, isTestModule, isTestLike, onCompile, watch, label = 'Build' } = {}) {
+  const RSPACK_BUILD_CONTEXT = require('./constants').RSPACK_BUILD_CONTEXT;
   const appDir = getMeteorAppDir();
   const configFile = getConfigFilePath();
 
   const endpoint = isClient ? 'Client' : 'Server';
+
+  // Get rspack environment before starting the spawn
+  const { params, envs } = getRspackEnv({ isClient, isServer, isTest, isTestModule, isTestLike });
+
+  // Extract entry path from params and verify it exists before spawning
+  // Params are in format: ['--env', 'key=value', '--env', 'key2=value2', ...]
+  const entryPathParam = params.find((p, i) => i > 0 && params[i - 1] === '--env' && p.startsWith('entryPath='));
+  if (entryPathParam) {
+    const entryPath = entryPathParam.replace('entryPath=', '');
+    const fullEntryPath = path.join(appDir, RSPACK_BUILD_CONTEXT, entryPath);
+
+    // Wait for entry file to exist (handles filesystem sync race conditions on CI)
+    // CI environments are slow - use 30s timeout
+    const exists = await waitForFileExists(fullEntryPath, 30000, 100);
+    if (!exists) {
+      logError(`[Rspack ${label} ${endpoint}] Entry file not found after 30s: ${fullEntryPath}`);
+      throw new Error(`Entry file not found: ${fullEntryPath}`);
+    }
+    logInfo(`[Rspack ${label} ${endpoint}] Entry file verified: ${fullEntryPath}`);
+  }
+
   // Use a promise to ensure Meteor waits until Rspack finishes
   return new Promise((resolve, reject) => {
-    const { params, envs } = getRspackEnv({ isClient, isServer, isTest, isTestModule, isTestLike });
     const rspackArgs = [
       'rspack',
       'build',
@@ -452,12 +491,34 @@ export async function runRspackBuild({ isClient, isServer, isTest, isTestModule,
       ...params,
     ].filter(Boolean);
     const { command, args } = getNpxCommand(rspackArgs);
+    // Filter out bloated env vars that rspack doesn't need
+    // METEOR_IGNORE can be 30KB+ due to combinatorial extension patterns
+    const { METEOR_IGNORE, ...cleanEnv } = process.env;
+    const spawnEnv = { ...cleanEnv, ...envs };
+
+    // Debug: log spawn sizes to diagnose E2BIG errors
+    const argsSize = args.reduce((sum, arg) => sum + arg.length, 0);
+    const envSize = Object.entries(spawnEnv).reduce((sum, [k, v]) => sum + k.length + (v?.length || 0), 0);
+    const envCount = Object.keys(spawnEnv).length;
+    logInfo(`[Rspack ${label} ${endpoint}] Spawn debug: args=${args.length} (${argsSize} bytes), env=${envCount} vars (${envSize} bytes)`);
+
+    // Find largest env vars to identify what's growing
+    const largeVars = Object.entries(spawnEnv)
+      .map(([k, v]) => ({ key: k, size: (v?.length || 0), value: v }))
+      .sort((a, b) => b.size - a.size)
+      .slice(0, 5);
+    logInfo(`[Rspack ${label} ${endpoint}] Largest env vars: ${largeVars.map(v => `${v.key}=${v.size}`).join(', ')}`);
+    // Print full content of vars > 10KB to see what's accumulating
+    largeVars.filter(v => v.size > 10000).forEach(v => {
+      logInfo(`[Rspack ${label} ${endpoint}] BLOATED VAR ${v.key} (${v.size} bytes):\n${v.value}`);
+    });
+
     spawnProcess(
       command,
       args,
       {
       cwd: appDir,
-      env: { ...process.env, ...envs },
+      env: spawnEnv,
       onStdout: (data) => {
         logInfo(`[Rspack ${label} ${endpoint}] ${data}`);
         if (onCompile && data.trim().includes("compiled")) {

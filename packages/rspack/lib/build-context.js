@@ -21,6 +21,7 @@ const {
   isMeteorAppBuild,
   isMeteorBlazeProject,
   isMeteorAppNative,
+  isMeteorAppTestFullApp,
 } = require('meteor/tools-core/lib/meteor');
 
 const {
@@ -126,13 +127,17 @@ export function ensureModuleFilesExist() {
     initialEntrypoints.testClient == null &&
     initialEntrypoints.testServer == null;
   const isTestModule = initialEntrypoints.testModule != null || isTestEager;
+  // In --full-app mode, test entry needs to import mainModule first
+  const isFullApp = isMeteorAppTestFullApp();
   const testClientFiles = {
     entryFile: initialEntrypoints.testClient || '',
     outputFile: getBuildFilePath({ isTest: true, isTestModule, isClient: true, role: FILE_ROLE.output, onlyFilename: true }),
+    ...(isFullApp && { mainEntryFile: initialEntrypoints.mainClient || '' }),
   };
   const testServerFiles = {
     entryFile: initialEntrypoints.testServer || '',
     outputFile: getBuildFilePath({ isTest: true, isTestModule, isServer: true, role: FILE_ROLE.output, onlyFilename: true }),
+    ...(isFullApp && { mainEntryFile: initialEntrypoints.mainServer || '' }),
   };
 
   const moduleFiles = {
@@ -419,6 +424,14 @@ if (module.hot) {
  */
 function getImportContent(config, side, role) {
   if (config?.entryFile && role === FILE_ROLE.entry) {
+    // In --full-app mode, import mainModule first, then testModule
+    if (config?.mainEntryFile && config?.isTest) {
+      return `/* Link to 🔌 Meteor ${capitalizeFirstLetter(side)} Main Entry (--full-app mode) */
+import '../../${config.mainEntryFile}';
+
+/* Link to 🔌 Meteor ${capitalizeFirstLetter(side)} Test Entry */
+import '../../${config.entryFile}';`;
+    }
     return `/* Link to 🔌 Meteor ${capitalizeFirstLetter(side)} Entry */
 import '../../${config?.entryFile}';`;
   }

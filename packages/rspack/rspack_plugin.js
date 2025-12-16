@@ -14,6 +14,9 @@
  * before Meteor continues execution.
  */
 
+// PATCHED: Local rspack plugin loaded
+console.log('[rspack_plugin] *** PATCHED LOCAL PLUGIN LOADED ***');
+
 // Import modules from lib
 const {
   GLOBAL_STATE_KEYS,
@@ -238,9 +241,16 @@ if (isMeteorAppRun() || isMeteorAppBuild() || isMeteorAppTest()) {
         onCompileServer,
       } = setupCompilationTracking();
 
-      // When run test for full app, run Rspack app server as well
-      // isTestLike ensures the app runtime environment inherit test envs
-      if (isMeteorAppTestFullApp()) {
+      // When run test for full app in eager mode (no testClient/testServer specified),
+      // build the main bundle separately. When testClient/testServer IS specified,
+      // the test entry file imports the mainModule first (handled in build-context.js)
+      console.log('[rspack_plugin] Test check:', {
+        isFullApp: isMeteorAppTestFullApp(),
+        testClient: initialEntrypoints?.testClient,
+        testServer: initialEntrypoints?.testServer,
+        willBuildMainBundle: isMeteorAppTestFullApp() && !initialEntrypoints?.testClient && !initialEntrypoints?.testServer
+      });
+      if (isMeteorAppTestFullApp() && !initialEntrypoints?.testClient && !initialEntrypoints?.testServer) {
         await runRspackBuild({
           isTest: false,
           isTestLike: true,
@@ -260,12 +270,15 @@ if (isMeteorAppRun() || isMeteorAppBuild() || isMeteorAppTest()) {
       }
 
       // When testModule is specified for client or server, run Rspack considering those files
+      // Disable watch mode in CI to prevent rebuild loops
+      const enableWatch = isMeteorAppTestWatch() && !process.env.CI;
+
       if (initialEntrypoints?.testClient || initialEntrypoints?.testServer) {
         runRspackBuild({
           isTest: true,
           isClient: true,
           isServer: false,
-          watch: isMeteorAppTestWatch(),
+          watch: enableWatch,
           onCompile: onCompileClient,
           label: 'Test',
         });
@@ -274,7 +287,7 @@ if (isMeteorAppRun() || isMeteorAppBuild() || isMeteorAppTest()) {
           isTest: true,
           isClient: false,
           isServer: true,
-          watch: isMeteorAppTestWatch(),
+          watch: enableWatch,
           onCompile: onCompileServer,
           label: 'Test',
         });
@@ -289,7 +302,7 @@ if (isMeteorAppRun() || isMeteorAppBuild() || isMeteorAppTest()) {
           isTestModule: true,
           isClient: true,
           isServer: false,
-          watch: isMeteorAppTestWatch(),
+          watch: enableWatch,
           onCompile: onCompileClient,
           label: 'Test',
         });
@@ -298,7 +311,7 @@ if (isMeteorAppRun() || isMeteorAppBuild() || isMeteorAppTest()) {
           isTestModule: true,
           isClient: false,
           isServer: true,
-          watch: isMeteorAppTestWatch(),
+          watch: enableWatch,
           onCompile: onCompileServer,
           label: 'Test',
         });
