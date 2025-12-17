@@ -1,0 +1,13 @@
+# Minimal app used by Meteor self-tests to validate rspack full-app mode.
+
+meteor
+webapp
+modules
+ecmascript
+mongo
+
+# Test runner (local core package)
+meteortesting:mocha
+
+# Enable rspack build plugin
+rspack
