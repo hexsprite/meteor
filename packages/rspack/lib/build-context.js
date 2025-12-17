@@ -132,12 +132,12 @@ export function ensureModuleFilesExist() {
   const testClientFiles = {
     entryFile: initialEntrypoints.testClient || '',
     outputFile: getBuildFilePath({ isTest: true, isTestModule, isClient: true, role: FILE_ROLE.output, onlyFilename: true }),
-    ...(isFullApp && { mainEntryFile: initialEntrypoints.mainClient || '' }),
+    ...(isFullApp && { mainEntryFile: initialEntrypoints.mainClient || '', isTest: true }),
   };
   const testServerFiles = {
     entryFile: initialEntrypoints.testServer || '',
     outputFile: getBuildFilePath({ isTest: true, isTestModule, isServer: true, role: FILE_ROLE.output, onlyFilename: true }),
-    ...(isFullApp && { mainEntryFile: initialEntrypoints.mainServer || '' }),
+    ...(isFullApp && { mainEntryFile: initialEntrypoints.mainServer || '', isTest: true }),
   };
 
   const moduleFiles = {
