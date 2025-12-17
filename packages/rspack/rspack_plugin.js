@@ -264,26 +264,9 @@ if (isMeteorAppRun() || isMeteorAppBuild() || isMeteorAppTest()) {
         onCompileServer,
       } = setupCompilationTracking();
 
-      // When run test for full app, run Rspack app server as well
-      // isTestLike ensures the app runtime environment inherit test envs
-      if (isMeteorAppTestFullApp()) {
-        await runRspackBuild({
-          isTest: false,
-          isTestLike: true,
-          isServer: true,
-          isClient: false,
-        });
-
-        if (isMeteorAppTestWatch()) {
-          runRspackBuild({
-            isServer: true,
-            isClient: false,
-            isTest: false,
-            isTestLike: true,
-            watch: true,
-          });
-        }
-      }
+      // In --full-app mode, the generated test entry imports the main module first.
+      // We intentionally do NOT build a separate main bundle here, and configureMeteorForRspack()
+      // points mainServer at the same generated module as testServer to avoid executing two bundles.
 
       // When testModule is specified for client or server, run Rspack considering those files
       if (initialEntrypoints?.testClient || initialEntrypoints?.testServer) {

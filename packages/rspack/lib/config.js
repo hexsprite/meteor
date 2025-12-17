@@ -17,6 +17,7 @@ const {
   isMeteorAppBuild,
   isMeteorAppDebug,
   isMeteorAppTest,
+  isMeteorAppTestFullApp,
   isMeteorAppConfigModernVerbose,
   isMeteorBlazeProject,
   isMeteorLessProject,
@@ -250,6 +251,13 @@ export function configureMeteorForRspack() {
       isTest: true,
     }),
   )}/**`;
+  const isTestFullApp = isMeteorAppTestFullApp();
+  const testFullAppIgnorePath = `${RSPACK_BUILD_CONTEXT}/${path.dirname(
+    getBuildFilePath({
+      isTest: true,
+      isTestFullApp: true,
+    }),
+  )}/**`;
   const otherMainIgnorePath =
     (isMeteorAppDevelopment() &&
       `${RSPACK_BUILD_CONTEXT}/${path.dirname(
@@ -265,10 +273,12 @@ export function configureMeteorForRspack() {
       }),
     )}/**`;
   const foldersToIgnore = [
-    ...((isMeteorAppTest() && [otherMainIgnorePath]) || [
-      testIgnorePath,
-      otherMainIgnorePath,
-    ]),
+    ...(isMeteorAppTest()
+      ? [
+          otherMainIgnorePath,
+          ...(isTestFullApp ? [testIgnorePath] : [testFullAppIgnorePath]),
+        ]
+      : [testIgnorePath, testFullAppIgnorePath, otherMainIgnorePath]),
     'node_modules/**',
     ...extraFoldersToIgnore,
   ].filter(Boolean);
@@ -325,6 +335,7 @@ export function configureMeteorForRspack() {
   const isTestModule = initialEntrypoints.testModule != null || isTestEager;
   const testClientModule = getBuildFilePath({
     isTest: true,
+    ...(isTestFullApp ? { isTestFullApp: true } : {}),
     ...env,
     ...commandRole,
     isTestModule,
@@ -332,6 +343,7 @@ export function configureMeteorForRspack() {
   });
   const testServerModule = getBuildFilePath({
     isTest: true,
+    ...(isTestFullApp ? { isTestFullApp: true } : {}),
     ...env,
     ...commandRole,
     isTestModule,
@@ -339,16 +351,22 @@ export function configureMeteorForRspack() {
   });
 
   const appEntrypoints = {
-    mainClient: `${RSPACK_BUILD_CONTEXT}/${mainClientModule}`,
-    mainServer: `${RSPACK_BUILD_CONTEXT}/${mainServerModule}`,
-    ...((isTestModule && {
-      testClient: `${RSPACK_BUILD_CONTEXT}/${testClientModule}`,
-      testServer: `${RSPACK_BUILD_CONTEXT}/${testServerModule}`,
-    }) || {
-      testClient: `${RSPACK_BUILD_CONTEXT}/${testClientModule}`,
-      testServer: `${RSPACK_BUILD_CONTEXT}/${testServerModule}`,
+    mainClient: `${RSPACK_BUILD_CONTEXT}/${mainClientModule}` ,
+    mainServer: `${RSPACK_BUILD_CONTEXT}/${mainServerModule}` ,
+    ...(isMeteorAppTest() && {
+      testClient: `${RSPACK_BUILD_CONTEXT}/${testClientModule}` ,
+      testServer: `${RSPACK_BUILD_CONTEXT}/${testServerModule}` ,
     }),
   };
+
+  // In --full-app mode we want a single logical server module graph (main + tests).
+  // Point mainServer at the same generated module as testServer so Meteor doesn't execute two bundles.
+  if (isMeteorAppTest() && isTestFullApp) {
+    appEntrypoints.mainServer = appEntrypoints.testServer;
+    if (initialEntrypoints?.testClient) {
+      appEntrypoints.mainClient = appEntrypoints.testClient;
+    }
+  }
   // Set entry points in environment variables if they exist
   setMeteorAppEntrypoints(appEntrypoints);
 

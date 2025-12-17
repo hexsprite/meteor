@@ -21,6 +21,8 @@ const {
   isMeteorAppBuild,
   isMeteorBlazeProject,
   isMeteorAppNative,
+  isMeteorAppTest,
+  isMeteorAppTestFullApp,
 } = require('meteor/tools-core/lib/meteor');
 
 const {
@@ -112,7 +114,9 @@ export function ensureModuleFilesExist() {
     : isMeteorAppBuild()
     ? { role: FILE_ROLE.build }
     : { role: FILE_ROLE.run };
+
   const initialEntrypoints = getInitialEntrypoints();
+
   const mainClientFiles = {
     entryFile: initialEntrypoints.mainClient || '',
     outputFile: getBuildFilePath({ isMain: true, isClient: true, ...env, role: FILE_ROLE.output, onlyFilename: true }),
@@ -121,21 +125,32 @@ export function ensureModuleFilesExist() {
     entryFile: initialEntrypoints.mainServer || '',
     outputFile: getBuildFilePath({ isMain: true, isServer: true, ...env, role: FILE_ROLE.output, onlyFilename: true }),
   };
+
   const isTestEager =
     initialEntrypoints.testModule == null &&
     initialEntrypoints.testClient == null &&
     initialEntrypoints.testServer == null;
   const isTestModule = initialEntrypoints.testModule != null || isTestEager;
+
+  // IMPORTANT:
+  // - `meteor run` must not generate test build-context artifacts.
+  // - `meteor test --full-app` must ensure the test entry imports main first.
+  const shouldGenerateTestFiles = isMeteorAppTest();
+  const isTestFullApp = isMeteorAppTestFullApp();
+  const testModuleFlags = isTestFullApp ? { isTestFullApp: true } : {};
+
   const testClientFiles = {
     entryFile: initialEntrypoints.testClient || '',
     outputFile: getBuildFilePath({ isTest: true, isTestModule, isClient: true, role: FILE_ROLE.output, onlyFilename: true }),
+    ...(isTestFullApp && { mainEntryFile: initialEntrypoints.mainClient || '' }),
   };
   const testServerFiles = {
     entryFile: initialEntrypoints.testServer || '',
     outputFile: getBuildFilePath({ isTest: true, isTestModule, isServer: true, role: FILE_ROLE.output, onlyFilename: true }),
+    ...(isTestFullApp && { mainEntryFile: initialEntrypoints.mainServer || '' }),
   };
 
-  const moduleFiles = {
+  const mainModuleFiles = {
     /* Main module files for client and server */
     [getBuildFilePath({ isMain: true, isClient: true, ...env, ...commandRole })]:
       getBuildFileContent({ isMain: true, isClient: true, ...env, ...commandRole, ...mainClientFiles }),
@@ -149,19 +164,29 @@ export function ensureModuleFilesExist() {
       getBuildFileContent({ isMain: true, isServer: true, ...env, role: FILE_ROLE.entry, ...mainServerFiles }),
     [getBuildFilePath({ isMain: true, isServer: true, ...env, role: FILE_ROLE.output })]:
       getBuildFileContent({ isMain: true, isServer: true, ...env, role: FILE_ROLE.output, ...mainServerFiles }),
-    /* Test module files when test module, test module files for client and server are present or eager discovery */
-    [getBuildFilePath({ isTest: true, isTestModule, isClient: true, ...commandRole })]:
-      getBuildFileContent({ isTest: true, isTestModule, isClient: true, ...commandRole, ...testClientFiles }),
-    [getBuildFilePath({ isTest: true, isTestModule, isClient: true, role: FILE_ROLE.entry })]:
-      getBuildFileContent({ isTest: true, isTestModule, isClient: true, role: FILE_ROLE.entry, ...testClientFiles }),
-    [getBuildFilePath({ isTest: true, isTestModule, isClient: true, role: FILE_ROLE.output })]:
-      getBuildFileContent({ isTest: true, isTestModule, isClient: true, role: FILE_ROLE.output, ...testClientFiles }),
-    [getBuildFilePath({ isTest: true, isTestModule, isServer: true, ...commandRole })]:
-      getBuildFileContent({ isTest: true, isTestModule, isServer: true, ...commandRole, ...testServerFiles }),
-    [getBuildFilePath({ isTest: true, isTestModule, isServer: true, role: FILE_ROLE.entry })]:
-      getBuildFileContent({ isTest: true, isTestModule, isServer: true, role: FILE_ROLE.entry, ...testServerFiles }),
-    [getBuildFilePath({ isTest: true, isTestModule, isServer: true, role: FILE_ROLE.output })]:
-      getBuildFileContent({ isTest: true, isTestModule, isServer: true, role: FILE_ROLE.output, ...testServerFiles }),
+  };
+
+  const testModuleFiles = shouldGenerateTestFiles
+    ? {
+        /* Test module files (only during `meteor test`) */
+        [getBuildFilePath({ isTest: true, ...testModuleFlags, isTestModule, isClient: true, ...commandRole })]:
+          getBuildFileContent({ isTest: true, ...testModuleFlags, isTestModule, isClient: true, ...commandRole, ...testClientFiles }),
+        [getBuildFilePath({ isTest: true, ...testModuleFlags, isTestModule, isClient: true, role: FILE_ROLE.entry })]:
+          getBuildFileContent({ isTest: true, ...testModuleFlags, isTestModule, isClient: true, role: FILE_ROLE.entry, ...testClientFiles }),
+        [getBuildFilePath({ isTest: true, ...testModuleFlags, isTestModule, isClient: true, role: FILE_ROLE.output })]:
+          getBuildFileContent({ isTest: true, ...testModuleFlags, isTestModule, isClient: true, role: FILE_ROLE.output, ...testClientFiles }),
+        [getBuildFilePath({ isTest: true, ...testModuleFlags, isTestModule, isServer: true, ...commandRole })]:
+          getBuildFileContent({ isTest: true, ...testModuleFlags, isTestModule, isServer: true, ...commandRole, ...testServerFiles }),
+        [getBuildFilePath({ isTest: true, ...testModuleFlags, isTestModule, isServer: true, role: FILE_ROLE.entry })]:
+          getBuildFileContent({ isTest: true, ...testModuleFlags, isTestModule, isServer: true, role: FILE_ROLE.entry, ...testServerFiles }),
+        [getBuildFilePath({ isTest: true, ...testModuleFlags, isTestModule, isServer: true, role: FILE_ROLE.output })]:
+          getBuildFileContent({ isTest: true, ...testModuleFlags, isTestModule, isServer: true, role: FILE_ROLE.output, ...testServerFiles }),
+      }
+    : {};
+
+  const moduleFiles = {
+    ...mainModuleFiles,
+    ...testModuleFiles,
   };
 
   Object.entries(moduleFiles).forEach(([filename, defaultContent]) => {
@@ -208,7 +233,7 @@ export function ensureModuleFilesExist() {
 }
 
 /**
- * Generates a build file path based on configuration parameters
+ * Generates a build file path based on configuration parameters based on configuration parameters
  * @param {Object} config - Configuration object containing build settings
  * @returns {string} The build file path or filename
  */
@@ -216,7 +241,7 @@ export function getBuildFilePath(config) {
   // Determine the module part (directory name)
   let module = '';
   if (config?.isTest) {
-    module = 'test';
+    module = config?.isTestFullApp ? 'test-full-app' : 'test';
   } else if (config?.isMain) {
     module = 'main';
   }
@@ -277,7 +302,7 @@ function getBanner(config, side, env, module, role) {
   const sideDisplay = capitalizeFirstLetter(side);
 
   // For test mode, use the existing banners
-  if (module === 'test') {
+  if (module === 'test' || module === 'test-full-app') {
     // Test file banners
     if (role === FILE_ROLE.entry) {
       // For test mode, if side is client or server, include it in the title
@@ -419,6 +444,14 @@ if (module.hot) {
  */
 function getImportContent(config, side, role) {
   if (config?.entryFile && role === FILE_ROLE.entry) {
+    if (config?.isTest && config?.mainEntryFile) {
+      return `/* Link to 🔌 Meteor ${capitalizeFirstLetter(side)} Main Entry (--full-app mode) */
+import '../../${config.mainEntryFile}';
+
+/* Link to 🔌 Meteor ${capitalizeFirstLetter(side)} Test Entry */
+import '../../${config.entryFile}';`;
+    }
+
     return `/* Link to 🔌 Meteor ${capitalizeFirstLetter(side)} Entry */
 import '../../${config?.entryFile}';`;
   }
@@ -465,7 +498,7 @@ ${
  */
 export function getBuildFileContent(config) {
   // Extract configuration values
-  const module = config?.isTest ? 'test' : config?.isMain ? 'main' : '';
+  const module = config?.isTest ? (config?.isTestFullApp ? 'test-full-app' : 'test') : config?.isMain ? 'main' : '';
   const side = config?.isTestModule ? 'test' : config?.isServer ? 'server' : config?.isClient ? 'client' : '';
   const env = config?.isDevelopment ? 'development' : config?.isProduction ? 'production' : '';
   const role = config?.role;
@@ -519,8 +552,21 @@ export function cleanBuildContextFiles() {
     const testClientPath = path.dirname(path.join(buildContextPath, getBuildFilePath({ isTest: true, isClient: true })));
     const testServerPath = path.dirname(path.join(buildContextPath, getBuildFilePath({ isTest: true, isServer: true })));
 
+    const testFullAppModulePath = path.dirname(path.join(buildContextPath, getBuildFilePath({ isTest: true, isTestFullApp: true, isTestModule: true })));
+    const testFullAppClientPath = path.dirname(path.join(buildContextPath, getBuildFilePath({ isTest: true, isTestFullApp: true, isClient: true })));
+    const testFullAppServerPath = path.dirname(path.join(buildContextPath, getBuildFilePath({ isTest: true, isTestFullApp: true, isServer: true })));
+
     // Create a Set to ensure unique directory paths
-    const uniqueDirPaths = new Set([mainClientPath, mainServerPath, testModulePath, testClientPath, testServerPath]);
+    const uniqueDirPaths = new Set([
+      mainClientPath,
+      mainServerPath,
+      testModulePath,
+      testClientPath,
+      testServerPath,
+      testFullAppModulePath,
+      testFullAppClientPath,
+      testFullAppServerPath,
+    ]);
 
     // Remove directories if they exist
     [...uniqueDirPaths].forEach(dirPath => {
