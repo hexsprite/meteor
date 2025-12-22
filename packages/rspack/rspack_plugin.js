@@ -14,6 +14,9 @@
  * before Meteor continues execution.
  */
 
+// PATCHED: Local rspack plugin loaded
+console.log('[rspack_plugin] *** PATCHED LOCAL PLUGIN LOADED ***');
+
 // Import modules from lib
 const {
   GLOBAL_STATE_KEYS,
@@ -177,9 +180,9 @@ if (isMeteorAppRun() || isMeteorAppBuild() || isMeteorAppTest()) {
     // Configure Meteor settings for Rspack
     configureMeteorForRspack();
 
-    // Calculate and set the devServerPort at boot
+    // Calculate and set the devServerPort at boot (finds random available port)
     if (!process.env.RSPACK_DEVSERVER_PORT) {
-      process.env.RSPACK_DEVSERVER_PORT = calculateDevServerPort();
+      process.env.RSPACK_DEVSERVER_PORT = await calculateDevServerPort();
       if (isMeteorAppDebug() || isMeteorAppConfigModernVerbose()) {
         logInfo(`[i] Rspack DevServer Port: ${process.env.RSPACK_DEVSERVER_PORT}`);
       }
@@ -195,14 +198,14 @@ if (isMeteorAppRun() || isMeteorAppBuild() || isMeteorAppTest()) {
     // Calculate and set the Rsdoctor client and server ports at boot only if bundle visualizer is enabled
     if (isMeteorBundleVisualizerProject()) {
       if (!process.env.RSDOCTOR_CLIENT_PORT) {
-        process.env.RSDOCTOR_CLIENT_PORT = calculateRsdoctorClientPort();
+        process.env.RSDOCTOR_CLIENT_PORT = await calculateRsdoctorClientPort();
         if (isMeteorAppDebug() || isMeteorAppConfigModernVerbose()) {
           logInfo(`[i] Rsdoctor Client Port: ${process.env.RSDOCTOR_CLIENT_PORT}`);
         }
       }
 
       if (!process.env.RSDOCTOR_SERVER_PORT) {
-        process.env.RSDOCTOR_SERVER_PORT = calculateRsdoctorServerPort();
+        process.env.RSDOCTOR_SERVER_PORT = await calculateRsdoctorServerPort();
         if (isMeteorAppDebug() || isMeteorAppConfigModernVerbose()) {
           logInfo(`[i] Rsdoctor Server Port: ${process.env.RSDOCTOR_SERVER_PORT}`);
         }
@@ -264,17 +267,44 @@ if (isMeteorAppRun() || isMeteorAppBuild() || isMeteorAppTest()) {
         onCompileServer,
       } = setupCompilationTracking();
 
-      // In --full-app mode, the generated test entry imports the main module first.
-      // We intentionally do NOT build a separate main bundle here, and configureMeteorForRspack()
-      // points mainServer at the same generated module as testServer to avoid executing two bundles.
+      // When run test for full app in eager mode (no testClient/testServer specified),
+      // build the main bundle separately. When testClient/testServer IS specified,
+      // the test entry file imports the mainModule first (handled in build-context.js)
+      console.log('[rspack_plugin] Test check:', {
+        isFullApp: isMeteorAppTestFullApp(),
+        testClient: initialEntrypoints?.testClient,
+        testServer: initialEntrypoints?.testServer,
+        willBuildMainBundle: isMeteorAppTestFullApp() && !initialEntrypoints?.testClient && !initialEntrypoints?.testServer
+      });
+      if (isMeteorAppTestFullApp() && !initialEntrypoints?.testClient && !initialEntrypoints?.testServer) {
+        await runRspackBuild({
+          isTest: false,
+          isTestLike: true,
+          isServer: true,
+          isClient: false,
+        });
+
+        if (isMeteorAppTestWatch()) {
+          runRspackBuild({
+            isServer: true,
+            isClient: false,
+            isTest: false,
+            isTestLike: true,
+            watch: true,
+          });
+        }
+      }
 
       // When testModule is specified for client or server, run Rspack considering those files
+      // Disable watch mode in CI to prevent rebuild loops
+      const enableWatch = isMeteorAppTestWatch() && !process.env.CI;
+
       if (initialEntrypoints?.testClient || initialEntrypoints?.testServer) {
         runRspackBuild({
           isTest: true,
           isClient: true,
           isServer: false,
-          watch: isMeteorAppTestWatch(),
+          watch: enableWatch,
           onCompile: onCompileClient,
           label: 'Test',
         });
@@ -283,7 +313,7 @@ if (isMeteorAppRun() || isMeteorAppBuild() || isMeteorAppTest()) {
           isTest: true,
           isClient: false,
           isServer: true,
-          watch: isMeteorAppTestWatch(),
+          watch: enableWatch,
           onCompile: onCompileServer,
           label: 'Test',
         });
@@ -298,7 +328,7 @@ if (isMeteorAppRun() || isMeteorAppBuild() || isMeteorAppTest()) {
           isTestModule: true,
           isClient: true,
           isServer: false,
-          watch: isMeteorAppTestWatch(),
+          watch: enableWatch,
           onCompile: onCompileClient,
           label: 'Test',
         });
@@ -307,7 +337,7 @@ if (isMeteorAppRun() || isMeteorAppBuild() || isMeteorAppTest()) {
           isTestModule: true,
           isClient: false,
           isServer: true,
-          watch: isMeteorAppTestWatch(),
+          watch: enableWatch,
           onCompile: onCompileServer,
           label: 'Test',
         });

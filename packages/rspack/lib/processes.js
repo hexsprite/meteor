@@ -61,49 +61,48 @@ const {
 } = require('./build-context');
 
 /**
- * Calculates the devServerPort based on process.env.PORT
- * Base port is 8077, and we add the sum of the digits of process.env.PORT
- * @returns {number} The calculated devServerPort
+ * Finds an available port by binding to port 0 and getting the assigned port
+ * @returns {Promise<number>} An available port
  */
-export function calculateDevServerPort() {
-  const port = getMeteorAppPort();
-  const basePort = 8077;
-
-  // Sum the digits of the port
-  const digitSum = port.split('').reduce((sum, digit) => sum + parseInt(digit, 10), 0);
-
-  return basePort + digitSum;
+function findAvailablePort() {
+  return new Promise((resolve, reject) => {
+    const net = require('net');
+    const server = net.createServer();
+    server.listen(0, '127.0.0.1', () => {
+      const port = server.address().port;
+      server.close(() => resolve(port));
+    });
+    server.on('error', reject);
+  });
 }
 
 /**
- * Calculates the Rsdoctor client port based on process.env.PORT
- * Base port is 8885, and we add the sum of the digits of process.env.PORT
- * @returns {number} The calculated Rsdoctor client port
+ * Finds an available port for the rspack dev server
+ * Logs the port for visibility when running multiple instances
+ * @returns {Promise<number>} An available port
  */
-export function calculateRsdoctorClientPort() {
-  const port = getMeteorAppPort();
-  const basePort = 8885;
-
-  // Sum the digits of the port
-  const digitSum = port.split('').reduce((sum, digit) => sum + parseInt(digit, 10), 0);
-
-  return basePort + digitSum;
+export async function calculateDevServerPort() {
+  const port = await findAvailablePort();
+  logInfo(`[Rspack] Dev server will use port ${port}`);
+  return port;
 }
 
 /**
- * Calculates the Rsdoctor server port based on process.env.PORT
- * Base port is 8885, and we add the sum of the digits of process.env.PORT + 1
- * @returns {number} The calculated Rsdoctor server port
+ * Finds an available port for Rsdoctor client
+ * @returns {Promise<number>} An available port
  */
-export function calculateRsdoctorServerPort() {
-  const port = getMeteorAppPort();
-  const basePort = 8885;
+export async function calculateRsdoctorClientPort() {
+  const port = await findAvailablePort();
+  return port;
+}
 
-  // Sum the digits of the port
-  const digitSum = port.split('').reduce((sum, digit) => sum + parseInt(digit, 10), 0);
-
-  // Add 1 to differentiate from client port
-  return basePort + digitSum + 1;
+/**
+ * Finds an available port for Rsdoctor server
+ * @returns {Promise<number>} An available port
+ */
+export async function calculateRsdoctorServerPort() {
+  const port = await findAvailablePort();
+  return port;
 }
 
 /**
