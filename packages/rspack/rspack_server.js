@@ -3,21 +3,27 @@ import { WebApp, WebAppInternals } from 'meteor/webapp';
 import path from 'path';
 import { parse as parseUrl } from 'url';
 import {
-  RSPACK_CHUNKS_CONTEXT,
-  RSPACK_ASSETS_CONTEXT,
+  getRspackChunksContext,
+  getRspackAssetsContext,
   RSPACK_HOT_UPDATE_REGEX,
 } from "./lib/constants";
+import {
+  isMeteorAppTest,
+  isMeteorAppTestFullApp,
+} from 'meteor/tools-core/lib/meteor';
 
-// Define constants for both development and production
-const rspackChunksContext = process.env.RSPACK_CHUNKS_CONTEXT || RSPACK_CHUNKS_CONTEXT;
-const rspackAssetsContext = process.env.RSPACK_ASSETS_CONTEXT || RSPACK_ASSETS_CONTEXT;
+// Get mode-aware context directories for test isolation
+const isTest = isMeteorAppTest();
+const isTestFullApp = isMeteorAppTestFullApp();
+const rspackChunksContext = getRspackChunksContext(isTest, isTestFullApp);
+const rspackAssetsContext = getRspackAssetsContext(isTest, isTestFullApp);
 
 /**
  * Regex pattern for rspack bundles
  * @constant {RegExp}
  */
 const RSPACK_CHUNKS_REGEX = new RegExp(
-  `^\/${rspackChunksContext}\/(.+)$`,
+  `^/${rspackChunksContext}/(.+)$`,
 );
 
 /**
@@ -25,7 +31,7 @@ const RSPACK_CHUNKS_REGEX = new RegExp(
  * @constant {RegExp}
  */
 const RSPACK_ASSETS_REGEX = new RegExp(
-  `^\/${rspackAssetsContext}\/(.+)$`,
+  `^/${rspackAssetsContext}/(.+)$`,
 );
 
 if (Meteor.isDevelopment) {

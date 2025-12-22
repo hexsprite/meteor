@@ -27,11 +27,18 @@ exports.isRspackOutputFile = function(filePath) {
   return rspackFilePattern.test(filePath);
 };
 
-// Function to get the rspack resources contexts
+// Function to get the rspack resources contexts (all modes for cleanup)
 exports.getRspackResourcesContexts = function() {
   return [
+    // Base contexts (dev/prod mode)
     rspackAssetsContext,
-    rspackChunksContext
+    rspackChunksContext,
+    // Test mode contexts (meteor test)
+    `${rspackAssetsContext}-test`,
+    `${rspackChunksContext}-test`,
+    // Full-app test mode contexts (meteor test --full-app)
+    `${rspackAssetsContext}-app-test`,
+    `${rspackChunksContext}-app-test`,
   ];
 };
 

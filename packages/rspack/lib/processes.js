@@ -48,9 +48,10 @@ const {
 
 const {
   GLOBAL_STATE_KEYS,
-  RSPACK_BUILD_CONTEXT,
   RSPACK_CHUNKS_CONTEXT,
   RSPACK_ASSETS_CONTEXT,
+  getRspackChunksContext,
+  getRspackAssetsContext,
   FILE_ROLE,
 } = require('./constants');
 
@@ -196,7 +197,7 @@ export function getRspackEnv({ isClient, isServer, isTest: inIsTest, isTestLike:
   const isTestModule = initialEntrypoints.testModule != null || isTestEager;
   const isTestFullApp = isMeteorAppTestFullApp();
 
-  const module = isTest ? { isTest: true, ...(isTestFullApp ? { isTestFullApp: true } : {}) } : { isMain: true };
+  const module = isTest ? { isTest: true } : { isMain: true };
   const env = isMeteorAppDevelopment()
     ? { isDevelopment: true }
     : { isProduction: true };
@@ -255,8 +256,8 @@ export function getRspackEnv({ isClient, isServer, isTest: inIsTest, isTestLike:
     ],
     ['runPath', getBuildFilePath({ ...module, ...env, ...side, ...commandRole }) ],
     ['buildContext', RSPACK_BUILD_CONTEXT],
-    ['chunksContext', RSPACK_CHUNKS_CONTEXT],
-    ['assetsContext', RSPACK_ASSETS_CONTEXT],
+    ['chunksContext', getRspackChunksContext(isTest, isTestFullApp)],
+    ['assetsContext', getRspackAssetsContext(isTest, isTestFullApp)],
     ['devServerPort', process.env.RSPACK_DEVSERVER_PORT],
     ['projectConfigPath', projectConfigPath],
     ['configPath', configPath],
@@ -312,11 +313,6 @@ export function getRspackEnv({ isClient, isServer, isTest: inIsTest, isTestLike:
  */
 export function startRspackClientServe(options = {}) {
   const { onCompile } = options;
-
-  if (process.env.SELFTEST === 't') {
-    if (onCompile) onCompile('compiled in 0 ms');
-    return null;
-  }
   // Get the current client process from global state
   const clientProcess = getGlobalState(GLOBAL_STATE_KEYS.CLIENT_PROCESS, null);
 
@@ -380,11 +376,6 @@ export function startRspackClientServe(options = {}) {
  */
 export function startRspackServerWatch(options = {}) {
   const { onCompile } = options;
-
-  if (process.env.SELFTEST === 't') {
-    if (onCompile) onCompile('compiled in 0 ms');
-    return null;
-  }
   // Get the current server process from global state
   const serverProcess = getGlobalState(GLOBAL_STATE_KEYS.SERVER_PROCESS, null);
 
@@ -436,6 +427,24 @@ export function startRspackServerWatch(options = {}) {
 }
 
 /**
+ * Waits for a file to exist with a timeout
+ * @param {string} filePath - Path to the file to wait for
+ * @param {number} timeoutMs - Maximum time to wait in milliseconds
+ * @param {number} intervalMs - Interval between checks in milliseconds
+ * @returns {Promise<boolean>} True if file exists, false if timeout
+ */
+async function waitForFileExists(filePath, timeoutMs = 5000, intervalMs = 50) {
+  const startTime = Date.now();
+  while (Date.now() - startTime < timeoutMs) {
+    if (fs.existsSync(filePath)) {
+      return true;
+    }
+    await new Promise(resolve => setTimeout(resolve, intervalMs));
+  }
+  return false;
+}
+
+/**
  * Runs Rspack build for both client and server without watch mode
  * @param {Object} options - Options for the build
  * @param {boolean} options.isClient - Whether this is a client build
@@ -447,117 +456,34 @@ export function startRspackServerWatch(options = {}) {
  * @throws {Error} If the build process fails
  */
 export async function runRspackBuild({ isClient, isServer, isTest, isTestModule, isTestLike, onCompile, watch, label = 'Build' } = {}) {
-  if (process.env.SELFTEST === 't') {
-    // Tool self-tests should not depend on `npx rspack` or any network-installed npm deps.
-    // Instead, write a minimal "bundle-like" output file that can run under Meteor's
-    // runtime without invoking rspack. This is intentionally independent from any
-    // app source code (which may use Meteor-only module IDs like `/imports/...`).
-    const appDir = getMeteorAppDir();
-
-    const env = isMeteorAppDevelopment() ? { isDevelopment: true } : { isProduction: true };
-    const isTestFullApp = isMeteorAppTestFullApp();
-
-    const initialEntrypoints = getMeteorInitialAppEntrypoints();
-    const isTestEager =
-      initialEntrypoints.testModule == null &&
-      initialEntrypoints.testClient == null &&
-      initialEntrypoints.testServer == null;
-    const resolvedIsTestModule =
-      isTestModule != null ? isTestModule : initialEntrypoints.testModule != null || isTestEager;
-
-    const moduleFlags = isTest
-      ? { isTest: true, ...(isTestFullApp ? { isTestFullApp: true } : {}) }
-      : { isMain: true };
-    const sideFlags = isClient ? { isClient: true } : { isServer: true };
-
-    const entryRel = getBuildFilePath({
-      ...moduleFlags,
-      ...env,
-      ...sideFlags,
-      isTestModule: resolvedIsTestModule,
-      role: FILE_ROLE.entry,
-    });
-    const outputRel = getBuildFilePath({
-      ...moduleFlags,
-      ...env,
-      ...sideFlags,
-      isTestModule: resolvedIsTestModule,
-      role: FILE_ROLE.output,
-    });
-
-    const outputAbs = path.join(appDir, RSPACK_BUILD_CONTEXT, outputRel);
-    fs.mkdirSync(path.dirname(outputAbs), { recursive: true });
-
-    const lines = [
-      '/* SELFTEST: stub rspack output (no npx, no network) */',
-      '(function () {',
-      "  const globalScope = typeof globalThis !== 'undefined' ? globalThis : global;",
-      '  if (!globalScope.__RSPACK_SELFTEST_COLLECTIONS__) {',
-      '    globalScope.__RSPACK_SELFTEST_COLLECTIONS__ = new Set();',
-      '  }',
-      '  function registerCollection(name) {',
-      '    if (globalScope.__RSPACK_SELFTEST_COLLECTIONS__.has(name)) {',
-      "      throw new Error(`There is already a collection named '${name}'`);",
-      '    }',
-      '    globalScope.__RSPACK_SELFTEST_COLLECTIONS__.add(name);',
-      '  }',
-      '',
-      '  // Simulate bundle-local module caching: this is NOT shared across bundles.',
-      '  let collectionsLoaded = false;',
-      '  function loadCollectionsOnce() {',
-      '    if (collectionsLoaded) return;',
-      '    collectionsLoaded = true;',
-      "    registerCollection('rspack-selftest');",
-      '  }',
-      '',
-    ];
-
-    if (isServer) {
-      // These markers are asserted by tool self-tests to verify the active build context.
-      lines.push(
-        "  console.log(`RSPACK_FULL_APP_MARKER CONFIG_SERVER=${process.env.METEOR_CONFIG_SERVER || ''}`);",
-      );
-      lines.push(
-        "  console.log(`RSPACK_FULL_APP_MARKER CONFIG_TEST_SERVER=${process.env.METEOR_CONFIG_TEST_SERVER || ''}`);",
-      );
-
-      if (isTest && isTestFullApp) {
-        // `meteor test --full-app` should run as a single server bundle where "main"
-        // code is loaded before "test" code.
-        lines.push('  // Full-app: main then tests');
-        lines.push('  loadCollectionsOnce();');
-        lines.push('  loadCollectionsOnce();');
-      } else if (isTest) {
-        // Test-only (non-full-app) bundle.
-        lines.push('  loadCollectionsOnce();');
-      } else {
-        // Main server bundle.
-        lines.push('  loadCollectionsOnce();');
-      }
-
-      // Ensure the test runner sees at least one passing test when running with mocha.
-      lines.push("  if (typeof describe === 'function' && typeof it === 'function') {");
-      lines.push("    const assert = require('assert').strict;");
-      lines.push("    describe('rspack selftest bundle', function () {");
-      lines.push("      it('runs', function () { assert.equal(true, true); });");
-      lines.push('    });');
-      lines.push('  }');
-    }
-
-    lines.push('})();');
-
-    fs.writeFileSync(outputAbs, `${lines.join('\n')}\n`, 'utf8');
-
-    if (onCompile) onCompile('compiled in 0 ms');
-    return;
-  }
+  const RSPACK_BUILD_CONTEXT = require('./constants').RSPACK_BUILD_CONTEXT;
   const appDir = getMeteorAppDir();
   const configFile = getConfigFilePath();
 
   const endpoint = isClient ? 'Client' : 'Server';
+
+  // Get rspack environment before starting the spawn
+  const { params, envs } = getRspackEnv({ isClient, isServer, isTest, isTestModule, isTestLike });
+
+  // Extract entry path from params and verify it exists before spawning
+  // Params are in format: ['--env', 'key=value', '--env', 'key2=value2', ...]
+  const entryPathParam = params.find((p, i) => i > 0 && params[i - 1] === '--env' && p.startsWith('entryPath='));
+  if (entryPathParam) {
+    const entryPath = entryPathParam.replace('entryPath=', '');
+    const fullEntryPath = path.join(appDir, RSPACK_BUILD_CONTEXT, entryPath);
+
+    // Wait for entry file to exist (handles filesystem sync race conditions on CI)
+    // CI environments are slow - use 30s timeout
+    const exists = await waitForFileExists(fullEntryPath, 30000, 100);
+    if (!exists) {
+      logError(`[Rspack ${label} ${endpoint}] Entry file not found after 30s: ${fullEntryPath}`);
+      throw new Error(`Entry file not found: ${fullEntryPath}`);
+    }
+    logInfo(`[Rspack ${label} ${endpoint}] Entry file verified: ${fullEntryPath}`);
+  }
+
   // Use a promise to ensure Meteor waits until Rspack finishes
   return new Promise((resolve, reject) => {
-    const { params, envs } = getRspackEnv({ isClient, isServer, isTest, isTestModule, isTestLike });
     const rspackArgs = [
       'rspack',
       'build',
@@ -567,12 +493,34 @@ export async function runRspackBuild({ isClient, isServer, isTest, isTestModule,
       ...params,
     ].filter(Boolean);
     const { command, args } = getNpxCommand(rspackArgs);
+    // Filter out bloated env vars that rspack doesn't need
+    // METEOR_IGNORE can be 30KB+ due to combinatorial extension patterns
+    const { METEOR_IGNORE, ...cleanEnv } = process.env;
+    const spawnEnv = { ...cleanEnv, ...envs };
+
+    // Debug: log spawn sizes to diagnose E2BIG errors
+    const argsSize = args.reduce((sum, arg) => sum + arg.length, 0);
+    const envSize = Object.entries(spawnEnv).reduce((sum, [k, v]) => sum + k.length + (v?.length || 0), 0);
+    const envCount = Object.keys(spawnEnv).length;
+    logInfo(`[Rspack ${label} ${endpoint}] Spawn debug: args=${args.length} (${argsSize} bytes), env=${envCount} vars (${envSize} bytes)`);
+
+    // Find largest env vars to identify what's growing
+    const largeVars = Object.entries(spawnEnv)
+      .map(([k, v]) => ({ key: k, size: (v?.length || 0), value: v }))
+      .sort((a, b) => b.size - a.size)
+      .slice(0, 5);
+    logInfo(`[Rspack ${label} ${endpoint}] Largest env vars: ${largeVars.map(v => `${v.key}=${v.size}`).join(', ')}`);
+    // Print full content of vars > 10KB to see what's accumulating
+    largeVars.filter(v => v.size > 10000).forEach(v => {
+      logInfo(`[Rspack ${label} ${endpoint}] BLOATED VAR ${v.key} (${v.size} bytes):\n${v.value}`);
+    });
+
     spawnProcess(
       command,
       args,
       {
       cwd: appDir,
-      env: { ...process.env, ...envs },
+      env: spawnEnv,
       onStdout: (data) => {
         logInfo(`[Rspack ${label} ${endpoint}] ${data}`);
         if (onCompile && data.trim().includes("compiled")) {

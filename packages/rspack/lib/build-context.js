@@ -38,6 +38,8 @@ const {
   RSPACK_BUILD_CONTEXT,
   RSPACK_CHUNKS_CONTEXT,
   RSPACK_ASSETS_CONTEXT,
+  getRspackChunksContext,
+  getRspackAssetsContext,
   GLOBAL_STATE_KEYS,
   FILE_ROLE,
 } = require('./constants');
@@ -87,8 +89,15 @@ export function ensureRspackBuildContextExists() {
     appDir,
     [
       RSPACK_BUILD_CONTEXT,
+      // Base asset/chunk contexts (dev/prod)
       `*/${RSPACK_ASSETS_CONTEXT}`,
       `*/${RSPACK_CHUNKS_CONTEXT}`,
+      // Test mode contexts (meteor test)
+      `*/${RSPACK_ASSETS_CONTEXT}-test`,
+      `*/${RSPACK_CHUNKS_CONTEXT}-test`,
+      // Full-app test mode contexts (meteor test --full-app)
+      `*/${RSPACK_ASSETS_CONTEXT}-app-test`,
+      `*/${RSPACK_CHUNKS_CONTEXT}-app-test`,
       RSPACK_DOCTOR_CONTEXT,
     ],
     'Meteor Modern-Tools build context directories',
@@ -114,9 +123,7 @@ export function ensureModuleFilesExist() {
     : isMeteorAppBuild()
     ? { role: FILE_ROLE.build }
     : { role: FILE_ROLE.run };
-
   const initialEntrypoints = getInitialEntrypoints();
-
   const mainClientFiles = {
     entryFile: initialEntrypoints.mainClient || '',
     outputFile: getBuildFilePath({ isMain: true, isClient: true, ...env, role: FILE_ROLE.output, onlyFilename: true }),
@@ -125,32 +132,25 @@ export function ensureModuleFilesExist() {
     entryFile: initialEntrypoints.mainServer || '',
     outputFile: getBuildFilePath({ isMain: true, isServer: true, ...env, role: FILE_ROLE.output, onlyFilename: true }),
   };
-
   const isTestEager =
     initialEntrypoints.testModule == null &&
     initialEntrypoints.testClient == null &&
     initialEntrypoints.testServer == null;
   const isTestModule = initialEntrypoints.testModule != null || isTestEager;
-
-  // IMPORTANT:
-  // - `meteor run` must not generate test build-context artifacts.
-  // - `meteor test --full-app` must ensure the test entry imports main first.
-  const shouldGenerateTestFiles = isMeteorAppTest();
-  const isTestFullApp = isMeteorAppTestFullApp();
-  const testModuleFlags = isTestFullApp ? { isTestFullApp: true } : {};
-
+  // In --full-app mode, test entry needs to import mainModule first
+  const isFullApp = isMeteorAppTestFullApp();
   const testClientFiles = {
     entryFile: initialEntrypoints.testClient || '',
     outputFile: getBuildFilePath({ isTest: true, isTestModule, isClient: true, role: FILE_ROLE.output, onlyFilename: true }),
-    ...(isTestFullApp && { mainEntryFile: initialEntrypoints.mainClient || '' }),
+    ...(isFullApp && { mainEntryFile: initialEntrypoints.mainClient || '', isTest: true }),
   };
   const testServerFiles = {
     entryFile: initialEntrypoints.testServer || '',
     outputFile: getBuildFilePath({ isTest: true, isTestModule, isServer: true, role: FILE_ROLE.output, onlyFilename: true }),
-    ...(isTestFullApp && { mainEntryFile: initialEntrypoints.mainServer || '' }),
+    ...(isFullApp && { mainEntryFile: initialEntrypoints.mainServer || '', isTest: true }),
   };
 
-  const mainModuleFiles = {
+  const moduleFiles = {
     /* Main module files for client and server */
     [getBuildFilePath({ isMain: true, isClient: true, ...env, ...commandRole })]:
       getBuildFileContent({ isMain: true, isClient: true, ...env, ...commandRole, ...mainClientFiles }),
@@ -164,29 +164,19 @@ export function ensureModuleFilesExist() {
       getBuildFileContent({ isMain: true, isServer: true, ...env, role: FILE_ROLE.entry, ...mainServerFiles }),
     [getBuildFilePath({ isMain: true, isServer: true, ...env, role: FILE_ROLE.output })]:
       getBuildFileContent({ isMain: true, isServer: true, ...env, role: FILE_ROLE.output, ...mainServerFiles }),
-  };
-
-  const testModuleFiles = shouldGenerateTestFiles
-    ? {
-        /* Test module files (only during `meteor test`) */
-        [getBuildFilePath({ isTest: true, ...testModuleFlags, isTestModule, isClient: true, ...commandRole })]:
-          getBuildFileContent({ isTest: true, ...testModuleFlags, isTestModule, isClient: true, ...commandRole, ...testClientFiles }),
-        [getBuildFilePath({ isTest: true, ...testModuleFlags, isTestModule, isClient: true, role: FILE_ROLE.entry })]:
-          getBuildFileContent({ isTest: true, ...testModuleFlags, isTestModule, isClient: true, role: FILE_ROLE.entry, ...testClientFiles }),
-        [getBuildFilePath({ isTest: true, ...testModuleFlags, isTestModule, isClient: true, role: FILE_ROLE.output })]:
-          getBuildFileContent({ isTest: true, ...testModuleFlags, isTestModule, isClient: true, role: FILE_ROLE.output, ...testClientFiles }),
-        [getBuildFilePath({ isTest: true, ...testModuleFlags, isTestModule, isServer: true, ...commandRole })]:
-          getBuildFileContent({ isTest: true, ...testModuleFlags, isTestModule, isServer: true, ...commandRole, ...testServerFiles }),
-        [getBuildFilePath({ isTest: true, ...testModuleFlags, isTestModule, isServer: true, role: FILE_ROLE.entry })]:
-          getBuildFileContent({ isTest: true, ...testModuleFlags, isTestModule, isServer: true, role: FILE_ROLE.entry, ...testServerFiles }),
-        [getBuildFilePath({ isTest: true, ...testModuleFlags, isTestModule, isServer: true, role: FILE_ROLE.output })]:
-          getBuildFileContent({ isTest: true, ...testModuleFlags, isTestModule, isServer: true, role: FILE_ROLE.output, ...testServerFiles }),
-      }
-    : {};
-
-  const moduleFiles = {
-    ...mainModuleFiles,
-    ...testModuleFiles,
+    /* Test module files when test module, test module files for client and server are present or eager discovery */
+    [getBuildFilePath({ isTest: true, isTestModule, isClient: true, ...commandRole })]:
+      getBuildFileContent({ isTest: true, isTestModule, isClient: true, ...commandRole, ...testClientFiles }),
+    [getBuildFilePath({ isTest: true, isTestModule, isClient: true, role: FILE_ROLE.entry })]:
+      getBuildFileContent({ isTest: true, isTestModule, isClient: true, role: FILE_ROLE.entry, ...testClientFiles }),
+    [getBuildFilePath({ isTest: true, isTestModule, isClient: true, role: FILE_ROLE.output })]:
+      getBuildFileContent({ isTest: true, isTestModule, isClient: true, role: FILE_ROLE.output, ...testClientFiles }),
+    [getBuildFilePath({ isTest: true, isTestModule, isServer: true, ...commandRole })]:
+      getBuildFileContent({ isTest: true, isTestModule, isServer: true, ...commandRole, ...testServerFiles }),
+    [getBuildFilePath({ isTest: true, isTestModule, isServer: true, role: FILE_ROLE.entry })]:
+      getBuildFileContent({ isTest: true, isTestModule, isServer: true, role: FILE_ROLE.entry, ...testServerFiles }),
+    [getBuildFilePath({ isTest: true, isTestModule, isServer: true, role: FILE_ROLE.output })]:
+      getBuildFileContent({ isTest: true, isTestModule, isServer: true, role: FILE_ROLE.output, ...testServerFiles }),
   };
 
   Object.entries(moduleFiles).forEach(([filename, defaultContent]) => {
@@ -233,7 +223,7 @@ export function ensureModuleFilesExist() {
 }
 
 /**
- * Generates a build file path based on configuration parameters based on configuration parameters
+ * Generates a build file path based on configuration parameters
  * @param {Object} config - Configuration object containing build settings
  * @returns {string} The build file path or filename
  */
@@ -241,7 +231,7 @@ export function getBuildFilePath(config) {
   // Determine the module part (directory name)
   let module = '';
   if (config?.isTest) {
-    module = config?.isTestFullApp ? 'test-full-app' : 'test';
+    module = 'test';
   } else if (config?.isMain) {
     module = 'main';
   }
@@ -302,7 +292,7 @@ function getBanner(config, side, env, module, role) {
   const sideDisplay = capitalizeFirstLetter(side);
 
   // For test mode, use the existing banners
-  if (module === 'test' || module === 'test-full-app') {
+  if (module === 'test') {
     // Test file banners
     if (role === FILE_ROLE.entry) {
       // For test mode, if side is client or server, include it in the title
@@ -444,14 +434,14 @@ if (module.hot) {
  */
 function getImportContent(config, side, role) {
   if (config?.entryFile && role === FILE_ROLE.entry) {
-    if (config?.isTest && config?.mainEntryFile) {
+    // In --full-app mode, import mainModule first, then testModule
+    if (config?.mainEntryFile && config?.isTest) {
       return `/* Link to 🔌 Meteor ${capitalizeFirstLetter(side)} Main Entry (--full-app mode) */
 import '../../${config.mainEntryFile}';
 
 /* Link to 🔌 Meteor ${capitalizeFirstLetter(side)} Test Entry */
 import '../../${config.entryFile}';`;
     }
-
     return `/* Link to 🔌 Meteor ${capitalizeFirstLetter(side)} Entry */
 import '../../${config?.entryFile}';`;
   }
@@ -498,7 +488,7 @@ ${
  */
 export function getBuildFileContent(config) {
   // Extract configuration values
-  const module = config?.isTest ? (config?.isTestFullApp ? 'test-full-app' : 'test') : config?.isMain ? 'main' : '';
+  const module = config?.isTest ? 'test' : config?.isMain ? 'main' : '';
   const side = config?.isTestModule ? 'test' : config?.isServer ? 'server' : config?.isClient ? 'client' : '';
   const env = config?.isDevelopment ? 'development' : config?.isProduction ? 'production' : '';
   const role = config?.role;
@@ -523,13 +513,15 @@ ${importContent}
 
 /**
  * Cleans the build context files of the current environment
- * Removes all build files and directories for the current environment
- * Also cleans _build-* files from public and private folders
+ * Only removes directories for the current mode (dev/prod vs test vs full-app test)
+ * to support running multiple Meteor instances simultaneously
  * @returns {void}
  */
 export function cleanBuildContextFiles() {
   const appDir = getMeteorAppDir();
   const buildContextPath = path.join(appDir, RSPACK_BUILD_CONTEXT);
+  const isTest = isMeteorAppTest();
+  const isTestFullApp = isMeteorAppTestFullApp();
 
   // Only proceed if the build context directory exists
   if (!fs.existsSync(buildContextPath)) {
@@ -543,39 +535,35 @@ export function cleanBuildContextFiles() {
   };
 
   try {
-    // Clean main module directories
-    const mainClientPath = path.dirname(path.join(buildContextPath, getBuildFilePath({ isMain: true, isClient: true, ...env })));
-    const mainServerPath = path.dirname(path.join(buildContextPath, getBuildFilePath({ isMain: true, isServer: true, ...env })));
+    if (isTest) {
+      // Test mode: only clean test directories in _build
+      const testModulePath = path.dirname(path.join(buildContextPath, getBuildFilePath({ isTest: true, isTestModule: true })));
+      const testClientPath = path.dirname(path.join(buildContextPath, getBuildFilePath({ isTest: true, isClient: true })));
+      const testServerPath = path.dirname(path.join(buildContextPath, getBuildFilePath({ isTest: true, isServer: true })));
 
-    // Clean test module directories if they exist
-    const testModulePath = path.dirname(path.join(buildContextPath, getBuildFilePath({ isTest: true, isTestModule: true })));
-    const testClientPath = path.dirname(path.join(buildContextPath, getBuildFilePath({ isTest: true, isClient: true })));
-    const testServerPath = path.dirname(path.join(buildContextPath, getBuildFilePath({ isTest: true, isServer: true })));
+      const uniqueDirPaths = new Set([testModulePath, testClientPath, testServerPath]);
+      [...uniqueDirPaths].forEach(dirPath => {
+        if (fs.existsSync(dirPath)) {
+          fs.rmSync(dirPath, { recursive: true, force: true });
+        }
+      });
+    } else {
+      // Dev/prod mode: only clean main directories for current env
+      const mainClientPath = path.dirname(path.join(buildContextPath, getBuildFilePath({ isMain: true, isClient: true, ...env })));
+      const mainServerPath = path.dirname(path.join(buildContextPath, getBuildFilePath({ isMain: true, isServer: true, ...env })));
 
-    const testFullAppModulePath = path.dirname(path.join(buildContextPath, getBuildFilePath({ isTest: true, isTestFullApp: true, isTestModule: true })));
-    const testFullAppClientPath = path.dirname(path.join(buildContextPath, getBuildFilePath({ isTest: true, isTestFullApp: true, isClient: true })));
-    const testFullAppServerPath = path.dirname(path.join(buildContextPath, getBuildFilePath({ isTest: true, isTestFullApp: true, isServer: true })));
+      const uniqueDirPaths = new Set([mainClientPath, mainServerPath]);
+      [...uniqueDirPaths].forEach(dirPath => {
+        if (fs.existsSync(dirPath)) {
+          fs.rmSync(dirPath, { recursive: true, force: true });
+        }
+      });
+    }
 
-    // Create a Set to ensure unique directory paths
-    const uniqueDirPaths = new Set([
-      mainClientPath,
-      mainServerPath,
-      testModulePath,
-      testClientPath,
-      testServerPath,
-      testFullAppModulePath,
-      testFullAppClientPath,
-      testFullAppServerPath,
-    ]);
+    // Clean mode-specific assets/chunks from public and private
+    const currentChunksContext = getRspackChunksContext(isTest, isTestFullApp);
+    const currentAssetsContext = getRspackAssetsContext(isTest, isTestFullApp);
 
-    // Remove directories if they exist
-    [...uniqueDirPaths].forEach(dirPath => {
-      if (fs.existsSync(dirPath)) {
-        fs.rmSync(dirPath, { recursive: true, force: true });
-      }
-    });
-
-    // Clean _build-* files from public and private folders
     const publicDir = path.join(appDir, 'public');
     const privateDir = path.join(appDir, 'private');
 
@@ -584,21 +572,22 @@ export function cleanBuildContextFiles() {
         try {
           const files = fs.readdirSync(dir);
           files.forEach(file => {
-            if ([RSPACK_ASSETS_CONTEXT, RSPACK_CHUNKS_CONTEXT, RSPACK_DOCTOR_CONTEXT].includes(file)) {
+            // Only clean current mode's contexts (not all modes)
+            if ([currentAssetsContext, currentChunksContext, RSPACK_DOCTOR_CONTEXT].includes(file)) {
               const filePath = path.join(dir, file);
               fs.rmSync(filePath, { recursive: true, force: true });
             }
           });
 
-          // Also remove client-rspack.js from public directory if it exists
-          if (dir === publicDir) {
+          // Also remove client-rspack.js from public directory (only in non-test mode)
+          if (dir === publicDir && !isTest) {
             const clientRspackPath = path.join(dir, 'client-rspack.js');
             if (fs.existsSync(clientRspackPath)) {
               fs.rmSync(clientRspackPath, { force: true });
             }
           }
         } catch (err) {
-          logError(`Failed to clean _build-* files from ${dir}: ${err.message}`);
+          logError(`Failed to clean build files from ${dir}: ${err.message}`);
         }
       }
     });

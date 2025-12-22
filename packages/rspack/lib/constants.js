@@ -89,6 +89,46 @@ process.env.RSPACK_CHUNKS_CONTEXT = RSPACK_CHUNKS_CONTEXT;
 export const RSPACK_DOCTOR_CONTEXT = '.rsdoctor';
 
 /**
+ * Get the mode suffix for asset contexts based on test mode
+ * @param {boolean} isTest - Whether in test mode
+ * @param {boolean} isTestFullApp - Whether in --full-app test mode
+ * @returns {string} Empty string, '-test', or '-app-test'
+ */
+function getModeSuffix(isTest, isTestFullApp) {
+  if (isTestFullApp) return '-app-test';
+  if (isTest) return '-test';
+  return '';
+}
+
+/**
+ * Get the mode-aware Rspack chunks context directory name
+ * Returns base context with mode suffix for test isolation
+ * @param {boolean} isTest - Whether in test mode
+ * @param {boolean} isTestFullApp - Whether in --full-app test mode
+ * @returns {string} Context directory name (e.g., 'build-chunks', 'build-chunks-test', 'build-chunks-app-test')
+ */
+export function getRspackChunksContext(isTest = false, isTestFullApp = false) {
+  const base = meteorConfig?.chunksContext ||
+    process.env.RSPACK_CHUNKS_CONTEXT ||
+    'build-chunks';
+  return `${base}${getModeSuffix(isTest, isTestFullApp)}`;
+}
+
+/**
+ * Get the mode-aware Rspack assets context directory name
+ * Returns base context with mode suffix for test isolation
+ * @param {boolean} isTest - Whether in test mode
+ * @param {boolean} isTestFullApp - Whether in --full-app test mode
+ * @returns {string} Context directory name (e.g., 'build-assets', 'build-assets-test', 'build-assets-app-test')
+ */
+export function getRspackAssetsContext(isTest = false, isTestFullApp = false) {
+  const base = meteorConfig?.assetsContext ||
+    process.env.RSPACK_ASSETS_CONTEXT ||
+    'build-assets';
+  return `${base}${getModeSuffix(isTest, isTestFullApp)}`;
+}
+
+/**
  * Regex pattern for hot update files
  * @constant {RegExp}
  */
