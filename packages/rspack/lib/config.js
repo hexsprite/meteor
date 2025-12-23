@@ -81,60 +81,25 @@ function checkMeteorIgnoreExactEntries(entries) {
 }
 
 /**
- * Gets the list of file extensions to ignore based on project type
- * For Blaze projects, it excludes .html as used by Blaze
- * For Less projects, it excludes .less files
- * For SCSS projects, it excludes .scss files
+ * Gets code file extensions to ignore in directories.
+ * Uses a fixed list instead of scanning all files (which caused 30KB+ env vars).
+ * Excludes extensions that Meteor compilers need to process.
  * @returns {string[]} Array of file extensions to ignore
  */
-function getFileExtensionsToIgnore() {
-  const isAnyCompilerProject =
-    isMeteorBlazeProject() || isMeteorLessProject() || isMeteorScssProject();
-  if (!isAnyCompilerProject) {
-    return [];
-  }
-
-  const allFiles = glob.sync('**/*', {
-    nodir: true,
-    dot: true,
-    ignore: ['node_modules/**', '.meteor/**'],
-  });
-  const existingExts = Array.from(
-    new Set(allFiles.map(f => path.extname(f).toLowerCase())),
-  );
-
-  // Base extensions to ignore
-  const baseExtensions = [
-    '.ts',
-    '.tsx',
-    '.js',
-    '.jsx',
-    '.mjs',
-    '.cjs',
-    '.json',
+function getCodeExtensionsToIgnore() {
+  // Fixed list of code extensions - no filesystem scanning needed
+  const codeExtensions = [
+    '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.json',
+    '.map', '.d.ts', '.spec.ts', '.test.ts'
   ];
 
-  // Filter existing extensions based on project type
-  let filteredExts = existingExts;
+  // Let Meteor compilers process their files
+  const exclude = [];
+  if (isMeteorBlazeProject()) exclude.push('.html');
+  if (isMeteorLessProject()) exclude.push('.less');
+  if (isMeteorScssProject()) exclude.push('.scss');
 
-  // For Blaze projects, exclude .html files
-  if (isMeteorBlazeProject()) {
-    filteredExts = existingExts.filter(ext => ext !== '.html');
-  }
-
-  // Check for Less projects and exclude .less files
-  if (isMeteorLessProject()) {
-    filteredExts = filteredExts.filter(ext => ext !== '.less');
-  }
-
-  // Check for SCSS projects and exclude .scss files
-  if (isMeteorScssProject()) {
-    filteredExts = filteredExts.filter(ext => ext !== '.scss');
-  }
-
-  return Array.from(new Set([...baseExtensions, ...filteredExts])).filter(
-    ext => ext !== '',
-  );
+  return codeExtensions.filter(ext => !exclude.includes(ext));
 }
 
 /**
@@ -164,8 +129,7 @@ export function configureMeteorForRspack() {
   const envPackageDirs = getMeteorEnvPackageDirs().map(
     dir => path.normalize(dir)?.split(path.sep)?.filter(Boolean)?.[0],
   );
-  let extraFoldersToIgnore = [
-    ...ignoredDirs
+  let extraFoldersToIgnore = ignoredDirs
       .filter(
         dir =>
           ![
@@ -177,18 +141,19 @@ export function configureMeteorForRspack() {
             RSPACK_BUILD_CONTEXT,
           ].includes(dir),
       )
-      .map(dir => `${dir}/**`),
-  ];
+      .map(dir => `${dir}/**`);
   let extraFilesToIgnore = [];
 
-  // Get extensions to ignore based on project type
-  const extensionsToIgnore = getFileExtensionsToIgnore();
-  // If we have extensions to ignore, apply them to the ignored directories
-  if (extensionsToIgnore.length > 0) {
-    extraFilesToIgnore = ignoredDirs.flatMap(dir =>
-      extensionsToIgnore.map(ext => `${dir}/**/*${ext}`),
-    );
-    extraFoldersToIgnore = [];
+  // For Blaze/Less/SCSS projects, use per-extension patterns so those compilers
+  // can still process their files. Uses fixed extension list (not filesystem scan).
+  if (isMeteorBlazeProject() || isMeteorLessProject() || isMeteorScssProject()) {
+    const extensionsToIgnore = getCodeExtensionsToIgnore();
+    // Only apply to top-level ignored dirs, not recursively to all subdirs
+    extraFilesToIgnore = extraFoldersToIgnore.flatMap(dirPattern => {
+      const dir = dirPattern.replace('/**', '');
+      return extensionsToIgnore.map(ext => `${dir}/**/*${ext}`);
+    });
+    extraFoldersToIgnore = []; // Clear since we're using extension patterns instead
   }
 
   // Skip CSS/HTML files in entrypoint contexts
@@ -251,39 +216,46 @@ export function configureMeteorForRspack() {
       isTest: true,
     }),
   )}/**`;
-  const isTestFullApp = isMeteorAppTestFullApp();
-  const testFullAppIgnorePath = `${RSPACK_BUILD_CONTEXT}/${path.dirname(
+  // In test mode, ignore BOTH main-dev and main-prod to prevent conflicts
+  const mainDevIgnorePath = `${RSPACK_BUILD_CONTEXT}/${path.dirname(
     getBuildFilePath({
-      isTest: true,
-      isTestFullApp: true,
+      isMain: true,
+      isDevelopment: true,
     }),
   )}/**`;
+  const mainProdIgnorePath = `${RSPACK_BUILD_CONTEXT}/${path.dirname(
+    getBuildFilePath({
+      isMain: true,
+      isProduction: true,
+    }),
+  )}/**`;
+  // Also ignore test-main directories (main bundle built for --full-app tests)
+  const testMainDevIgnorePath = `${RSPACK_BUILD_CONTEXT}/${path.dirname(
+    getBuildFilePath({
+      isTestMain: true,
+      isDevelopment: true,
+    }),
+  )}/**`;
+  const testMainProdIgnorePath = `${RSPACK_BUILD_CONTEXT}/${path.dirname(
+    getBuildFilePath({
+      isTestMain: true,
+      isProduction: true,
+    }),
+  )}/**`;
+  // For non-test mode, ignore the opposite env's main dir
   const otherMainIgnorePath =
-    (isMeteorAppDevelopment() &&
-      `${RSPACK_BUILD_CONTEXT}/${path.dirname(
-        getBuildFilePath({
-          isMain: true,
-          isProduction: true,
-        }),
-      )}/**`) ||
-    `${RSPACK_BUILD_CONTEXT}/${path.dirname(
-      getBuildFilePath({
-        isMain: true,
-        isDevelopment: true,
-      }),
-    )}/**`;
+    (isMeteorAppDevelopment() && mainProdIgnorePath) || mainDevIgnorePath;
   const foldersToIgnore = [
-    ...(isMeteorAppTest()
-      ? [
-          otherMainIgnorePath,
-          ...(isTestFullApp ? [testIgnorePath] : [testFullAppIgnorePath]),
-        ]
-      : [testIgnorePath, testFullAppIgnorePath, otherMainIgnorePath]),
+    ...((isMeteorAppTest() && [mainDevIgnorePath, mainProdIgnorePath]) || [
+      testIgnorePath,
+      testMainDevIgnorePath,
+      testMainProdIgnorePath,
+      otherMainIgnorePath,
+    ]),
     'node_modules/**',
     ...extraFoldersToIgnore,
   ].filter(Boolean);
-  const rootFilesToIgnore = [
-    ...projectRootFilesAndFolders.files.filter(
+  const rootFilesToIgnore = projectRootFilesAndFolders.files.filter(
       file =>
         ![
           'package.json',
@@ -292,8 +264,7 @@ export function configureMeteorForRspack() {
           'postcss.config.js',
           'scss-config.json',
         ].includes(file),
-    ),
-  ];
+    );
   const filesToIgnore = [...rootFilesToIgnore, ...extraFilesToIgnore];
   const unignoredFilesAndFolders = buildUnignorePatterns(
     meteorAppConfig?.modules || [],
@@ -302,6 +273,7 @@ export function configureMeteorForRspack() {
   const meteorAppIgnores = `${foldersToIgnore.join(' ')} ${filesToIgnore.join(
     ' ',
   )} ${unignoredFilesAndFolders.join(' ')}`.trim();
+
   setMeteorAppIgnore(meteorAppIgnores);
 
   if (isMeteorAppDebug() || isMeteorAppConfigModernVerbose()) {
@@ -316,18 +288,23 @@ export function configureMeteorForRspack() {
     : isMeteorAppBuild()
     ? { role: FILE_ROLE.build }
     : { role: FILE_ROLE.run };
+  // In --full-app test mode, use isTestMain so main bundles go to test-main-dev/
+  // instead of main-dev/, avoiding conflicts with the dev server
+  const isFullAppTest = isMeteorAppTestFullApp();
+  const mainModuleType = isFullAppTest ? { isTestMain: true } : { isMain: true };
   const mainClientModule = getBuildFilePath({
-    isMain: true,
+    ...mainModuleType,
     ...env,
     ...commandRole,
     isClient: true,
   });
   const mainServerModule = getBuildFilePath({
-    isMain: true,
+    ...mainModuleType,
     ...env,
     ...commandRole,
     isServer: true,
   });
+
   const isTestEager =
     initialEntrypoints.testModule == null &&
     initialEntrypoints.testClient == null &&
@@ -335,7 +312,6 @@ export function configureMeteorForRspack() {
   const isTestModule = initialEntrypoints.testModule != null || isTestEager;
   const testClientModule = getBuildFilePath({
     isTest: true,
-    ...(isTestFullApp ? { isTestFullApp: true } : {}),
     ...env,
     ...commandRole,
     isTestModule,
@@ -343,7 +319,6 @@ export function configureMeteorForRspack() {
   });
   const testServerModule = getBuildFilePath({
     isTest: true,
-    ...(isTestFullApp ? { isTestFullApp: true } : {}),
     ...env,
     ...commandRole,
     isTestModule,
@@ -351,22 +326,16 @@ export function configureMeteorForRspack() {
   });
 
   const appEntrypoints = {
-    mainClient: `${RSPACK_BUILD_CONTEXT}/${mainClientModule}` ,
-    mainServer: `${RSPACK_BUILD_CONTEXT}/${mainServerModule}` ,
-    ...(isMeteorAppTest() && {
-      testClient: `${RSPACK_BUILD_CONTEXT}/${testClientModule}` ,
-      testServer: `${RSPACK_BUILD_CONTEXT}/${testServerModule}` ,
+    mainClient: `${RSPACK_BUILD_CONTEXT}/${mainClientModule}`,
+    mainServer: `${RSPACK_BUILD_CONTEXT}/${mainServerModule}`,
+    ...((isTestModule && {
+      testClient: `${RSPACK_BUILD_CONTEXT}/${testClientModule}`,
+      testServer: `${RSPACK_BUILD_CONTEXT}/${testServerModule}`,
+    }) || {
+      testClient: `${RSPACK_BUILD_CONTEXT}/${testClientModule}`,
+      testServer: `${RSPACK_BUILD_CONTEXT}/${testServerModule}`,
     }),
   };
-
-  // In --full-app mode we want a single logical server module graph (main + tests).
-  // Point mainServer at the same generated module as testServer so Meteor doesn't execute two bundles.
-  if (isMeteorAppTest() && isTestFullApp) {
-    appEntrypoints.mainServer = appEntrypoints.testServer;
-    if (initialEntrypoints?.testClient) {
-      appEntrypoints.mainClient = appEntrypoints.testClient;
-    }
-  }
   // Set entry points in environment variables if they exist
   setMeteorAppEntrypoints(appEntrypoints);
 

@@ -124,21 +124,23 @@ export function ensureModuleFilesExist() {
     ? { role: FILE_ROLE.build }
     : { role: FILE_ROLE.run };
   const initialEntrypoints = getInitialEntrypoints();
+  // In --full-app mode, use isTestMain so main bundles go to test-main-dev/
+  // instead of main-dev/, avoiding conflicts with the dev server
+  const isFullApp = isMeteorAppTestFullApp();
+  const mainModuleType = isFullApp ? { isTestMain: true } : { isMain: true };
   const mainClientFiles = {
     entryFile: initialEntrypoints.mainClient || '',
-    outputFile: getBuildFilePath({ isMain: true, isClient: true, ...env, role: FILE_ROLE.output, onlyFilename: true }),
+    outputFile: getBuildFilePath({ ...mainModuleType, isClient: true, ...env, role: FILE_ROLE.output, onlyFilename: true }),
   };
   const mainServerFiles = {
     entryFile: initialEntrypoints.mainServer || '',
-    outputFile: getBuildFilePath({ isMain: true, isServer: true, ...env, role: FILE_ROLE.output, onlyFilename: true }),
+    outputFile: getBuildFilePath({ ...mainModuleType, isServer: true, ...env, role: FILE_ROLE.output, onlyFilename: true }),
   };
   const isTestEager =
     initialEntrypoints.testModule == null &&
     initialEntrypoints.testClient == null &&
     initialEntrypoints.testServer == null;
   const isTestModule = initialEntrypoints.testModule != null || isTestEager;
-  // In --full-app mode, test entry needs to import mainModule first
-  const isFullApp = isMeteorAppTestFullApp();
   const testClientFiles = {
     entryFile: initialEntrypoints.testClient || '',
     outputFile: getBuildFilePath({ isTest: true, isTestModule, isClient: true, role: FILE_ROLE.output, onlyFilename: true }),
@@ -151,19 +153,19 @@ export function ensureModuleFilesExist() {
   };
 
   const moduleFiles = {
-    /* Main module files for client and server */
-    [getBuildFilePath({ isMain: true, isClient: true, ...env, ...commandRole })]:
-      getBuildFileContent({ isMain: true, isClient: true, ...env, ...commandRole, ...mainClientFiles }),
-    [getBuildFilePath({ isMain: true, isClient: true, ...env, role: FILE_ROLE.entry })]:
-      getBuildFileContent({ isMain: true, isClient: true, ...env, role: FILE_ROLE.entry, ...mainClientFiles }),
-    [getBuildFilePath({ isMain: true, isClient: true, ...env, role: FILE_ROLE.output })]:
-      getBuildFileContent({ isMain: true, isClient: true, ...env, role: FILE_ROLE.output, ...mainClientFiles }),
-    [getBuildFilePath({ isMain: true, isServer: true, ...env, ...commandRole })]:
-      getBuildFileContent({ isMain: true, isServer: true, ...env, ...commandRole, ...mainServerFiles }),
-    [getBuildFilePath({ isMain: true, isServer: true, ...env, role: FILE_ROLE.entry })]:
-      getBuildFileContent({ isMain: true, isServer: true, ...env, role: FILE_ROLE.entry, ...mainServerFiles }),
-    [getBuildFilePath({ isMain: true, isServer: true, ...env, role: FILE_ROLE.output })]:
-      getBuildFileContent({ isMain: true, isServer: true, ...env, role: FILE_ROLE.output, ...mainServerFiles }),
+    /* Main module files for client and server - uses test-main-dev/ in --full-app mode */
+    [getBuildFilePath({ ...mainModuleType, isClient: true, ...env, ...commandRole })]:
+      getBuildFileContent({ ...mainModuleType, isClient: true, ...env, ...commandRole, ...mainClientFiles }),
+    [getBuildFilePath({ ...mainModuleType, isClient: true, ...env, role: FILE_ROLE.entry })]:
+      getBuildFileContent({ ...mainModuleType, isClient: true, ...env, role: FILE_ROLE.entry, ...mainClientFiles }),
+    [getBuildFilePath({ ...mainModuleType, isClient: true, ...env, role: FILE_ROLE.output })]:
+      getBuildFileContent({ ...mainModuleType, isClient: true, ...env, role: FILE_ROLE.output, ...mainClientFiles }),
+    [getBuildFilePath({ ...mainModuleType, isServer: true, ...env, ...commandRole })]:
+      getBuildFileContent({ ...mainModuleType, isServer: true, ...env, ...commandRole, ...mainServerFiles }),
+    [getBuildFilePath({ ...mainModuleType, isServer: true, ...env, role: FILE_ROLE.entry })]:
+      getBuildFileContent({ ...mainModuleType, isServer: true, ...env, role: FILE_ROLE.entry, ...mainServerFiles }),
+    [getBuildFilePath({ ...mainModuleType, isServer: true, ...env, role: FILE_ROLE.output })]:
+      getBuildFileContent({ ...mainModuleType, isServer: true, ...env, role: FILE_ROLE.output, ...mainServerFiles }),
     /* Test module files when test module, test module files for client and server are present or eager discovery */
     [getBuildFilePath({ isTest: true, isTestModule, isClient: true, ...commandRole })]:
       getBuildFileContent({ isTest: true, isTestModule, isClient: true, ...commandRole, ...testClientFiles }),
@@ -232,6 +234,9 @@ export function getBuildFilePath(config) {
   let module = '';
   if (config?.isTest) {
     module = 'test';
+  } else if (config?.isTestMain) {
+    // Main bundle built for --full-app tests (isolated from regular dev/prod main)
+    module = 'test-main';
   } else if (config?.isMain) {
     module = 'main';
   }
@@ -488,7 +493,7 @@ ${
  */
 export function getBuildFileContent(config) {
   // Extract configuration values
-  const module = config?.isTest ? 'test' : config?.isMain ? 'main' : '';
+  const module = config?.isTest ? 'test' : config?.isTestMain ? 'test-main' : config?.isMain ? 'main' : '';
   const side = config?.isTestModule ? 'test' : config?.isServer ? 'server' : config?.isClient ? 'client' : '';
   const env = config?.isDevelopment ? 'development' : config?.isProduction ? 'production' : '';
   const role = config?.role;
@@ -536,12 +541,15 @@ export function cleanBuildContextFiles() {
 
   try {
     if (isTest) {
-      // Test mode: only clean test directories in _build
+      // Test mode: clean test directories AND test-main directories in _build
       const testModulePath = path.dirname(path.join(buildContextPath, getBuildFilePath({ isTest: true, isTestModule: true })));
       const testClientPath = path.dirname(path.join(buildContextPath, getBuildFilePath({ isTest: true, isClient: true })));
       const testServerPath = path.dirname(path.join(buildContextPath, getBuildFilePath({ isTest: true, isServer: true })));
+      // Also clean test-main directories (main bundle built for --full-app tests)
+      const testMainClientPath = path.dirname(path.join(buildContextPath, getBuildFilePath({ isTestMain: true, isClient: true, ...env })));
+      const testMainServerPath = path.dirname(path.join(buildContextPath, getBuildFilePath({ isTestMain: true, isServer: true, ...env })));
 
-      const uniqueDirPaths = new Set([testModulePath, testClientPath, testServerPath]);
+      const uniqueDirPaths = new Set([testModulePath, testClientPath, testServerPath, testMainClientPath, testMainServerPath]);
       [...uniqueDirPaths].forEach(dirPath => {
         if (fs.existsSync(dirPath)) {
           fs.rmSync(dirPath, { recursive: true, force: true });

@@ -196,7 +196,15 @@ export function getRspackEnv({ isClient, isServer, isTest: inIsTest, isTestLike:
   const isTestModule = initialEntrypoints.testModule != null || isTestEager;
   const isTestFullApp = isMeteorAppTestFullApp();
 
-  const module = isTest ? { isTest: true } : { isMain: true };
+  // Determine module type for path generation:
+  // - isTest: true → test/ directory (actual test files)
+  // - isTestLike && !isTest → test-main/ directory (main bundle built for --full-app tests)
+  // - otherwise → main/ directory (regular dev/prod builds)
+  const module = isTest
+    ? { isTest: true }
+    : isTestLike
+      ? { isTestMain: true }
+      : { isMain: true };
   const env = isMeteorAppDevelopment()
     ? { isDevelopment: true }
     : { isProduction: true };
